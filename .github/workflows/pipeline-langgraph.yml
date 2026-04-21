@@ -1,0 +1,110 @@
+name: pipeline-phase6
+
+on:
+  workflow_dispatch:
+    inputs:
+      prev_tag:
+        description: Previous MatrixOne tag
+        required: false
+        default: ""
+        type: string
+      new_tag:
+        description: New MatrixOne tag
+        required: true
+        type: string
+      dry_run:
+        description: Dry run only
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  run-phase6:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Static checks
+        run: ruff check app tests
+
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Resolve trigger inputs
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            prev_tag="${{ inputs.prev_tag }}"
+            new_tag="${{ inputs.new_tag }}"
+            dry_run="${{ inputs.dry_run }}"
+            trigger_source="workflow_dispatch"
+          else
+            new_tag="${GITHUB_REF_NAME}"
+            prev_tag=""
+            dry_run="true"
+            trigger_source="tag"
+          fi
+          echo "prev_tag=${prev_tag}" >> "${GITHUB_OUTPUT}"
+          echo "new_tag=${new_tag}" >> "${GITHUB_OUTPUT}"
+          echo "dry_run=${dry_run}" >> "${GITHUB_OUTPUT}"
+          echo "trigger_source=${trigger_source}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run phase6 workflow
+        env:
+          MATRIXONE_REPO: ${{ vars.MATRIXONE_REPO }}
+          MATRIXONE_REPO_DIR: ${{ vars.MATRIXONE_REPO_DIR }}
+          MATRIXORIGIN_DOCS_REPO: ${{ vars.MATRIXORIGIN_DOCS_REPO }}
+          DOCS_REPO_DIR: ${{ vars.DOCS_REPO_DIR }}
+          PATH_MAPPING_FILE: ./configs/path_mapping.yaml
+          AGENTS_CONFIG_PATH: ./configs/agents.yaml
+          MODELS_CONFIG_PATH: ./configs/models.yaml
+          PROMPTS_CONFIG_PATH: ./configs/prompts.yaml
+          QUALITY_GATES_CONFIG_PATH: ./configs/quality_gates.yaml
+          DOCS_REPO_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          dry_flag="--no-dry-run"
+          if [[ "${{ steps.resolve.outputs.dry_run }}" == "true" ]]; then
+            dry_flag="--dry-run"
+          fi
+          if [[ "${{ steps.resolve.outputs.dry_run }}" != "true" && -z "${MATRIXORIGIN_DOCS_REPO}" ]]; then
+            echo "MATRIXORIGIN_DOCS_REPO is required when dry_run=false"
+            exit 1
+          fi
+          if [[ "${{ steps.resolve.outputs.dry_run }}" != "true" && -z "${MATRIXONE_REPO}" ]]; then
+            echo "MATRIXONE_REPO is required when dry_run=false"
+            exit 1
+          fi
+          if [[ "${{ steps.resolve.outputs.dry_run }}" != "true" && -z "${DOCS_REPO_TOKEN}" ]]; then
+            echo "DOCS_REPO_TOKEN is required when dry_run=false"
+            exit 1
+          fi
+          python -m app.graph.workflow \
+            --prev-tag "${{ steps.resolve.outputs.prev_tag }}" \
+            --new-tag "${{ steps.resolve.outputs.new_tag }}" \
+            --trigger-source "${{ steps.resolve.outputs.trigger_source }}" \
+            "${dry_flag}"
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runs-phase6
+          path: runs/

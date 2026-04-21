@@ -1,0 +1,16 @@
+defaults:
+  author_plugin: deterministic_author
+  reviewer_plugin: deterministic_reviewer
+  max_revision_loops: 2
+
+plugins:
+  deterministic_author:
+    type: deterministic_author
+  deterministic_reviewer:
+    type: deterministic_reviewer
+  mcp_author:
+    type: mcp_author
+    endpoint: ""
+  mcp_reviewer:
+    type: mcp_reviewer
+    endpoint: ""

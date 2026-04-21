@@ -1,0 +1,8 @@
+# MatrixOne code path -> matrixorigin.io docs path mapping (MVP)
+mappings:
+  - code_path_prefix: "pkg/sql/parsers"
+    docs_path: "docs/sql-reference/sql-syntax.md"
+    topic: "sql_syntax"
+  - code_path_prefix: "pkg/frontend/variables"
+    docs_path: "docs/sql-reference/system-variables.md"
+    topic: "system_variables"

@@ -1,0 +1,25 @@
+gates:
+  - id: G1
+    description: "文档正文禁止出现 AI 元信息"
+    level: blocker
+  - id: G2
+    description: "每条改动必须可映射到 evidence 与 claims"
+    level: blocker
+  - id: G3
+    description: "reviewer fail 必须阻断 PR"
+    level: blocker
+  - id: G4
+    description: "文档改动路径必须在白名单"
+    level: blocker
+  - id: G5
+    description: "每次运行必须产出审计 artifacts"
+    level: blocker
+  - id: G6
+    description: "禁止自动 merge"
+    level: blocker
+  - id: G7
+    description: "无实质改动不创建 PR"
+    level: warning
+  - id: G8
+    description: "同一 idempotency_key 重复触发应跳过"
+    level: warning

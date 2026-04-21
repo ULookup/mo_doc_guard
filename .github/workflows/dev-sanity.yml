@@ -1,0 +1,45 @@
+name: dev-sanity
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check app tests
+      - name: Pytest
+        run: pytest -q
+
+  docker-healthcheck:
+    needs: python-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare env file
+        run: cp .env.example .env
+
+      - name: Build and start
+        run: docker compose up --build -d
+
+      - name: Health check
+        run: |
+          sleep 2
+          curl --fail http://127.0.0.1:8080/healthz
+
+      - name: Stop
+        if: always()
+        run: docker compose down -v
