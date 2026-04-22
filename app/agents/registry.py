@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import os
 from pathlib import Path
+import time
 from typing import Any
 
 import yaml
@@ -14,90 +17,84 @@ from app.agents.base import (
     ReviewerAgentInput,
     ReviewerAgentOutput,
 )
-from app.connectors.mcp_agent_client import McpAgentClient
+from app.connectors.mcp_agent_client import MCPAgentClient
 from app.connectors.model_router import ModelRouter
-from app.skills.mo_doc_reviewer import ReviewerInput, run_reviewer_skill
-from app.skills.mo_doc_writer import WriterInput, run_writer_skill
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
-class DeterministicAuthorPlugin:
-    path_mapping_file: Path
-
-    def run(self, payload: AuthorAgentInput) -> AuthorAgentOutput:
-        output = run_writer_skill(
-            WriterInput(
-                prev_tag=payload.prev_tag,
-                new_tag=payload.new_tag,
-                evidence_bundle=payload.evidence_bundle,
-                path_mapping_file=self.path_mapping_file,
-            )
-        )
-        return AuthorAgentOutput(
-            doc_patch_diff=output.doc_patch_diff,
-            change_summary_md=output.change_summary_md,
-            claims=output.claims,
-            evidence_map={"source": "deterministic_writer"},
-        )
-
-
-@dataclass
-class DeterministicReviewerPlugin:
-    def run(self, payload: ReviewerAgentInput) -> ReviewerAgentOutput:
-        output = run_reviewer_skill(
-            ReviewerInput(
-                doc_patch_diff=payload.doc_patch_diff,
-                claims=payload.claims,
-                evidence_bundle=payload.evidence_bundle,
-            )
-        )
-        decision = "approved" if output.decision == "pass" else "changes_requested"
-        return ReviewerAgentOutput(
-            decision=decision,
-            comments="\n".join(output.blocking_issues) if output.blocking_issues else "approved",
-            blocking_issues=output.blocking_issues,
-            review_report=output.review_report,
-            verification_map={"source": "deterministic_reviewer"},
-        )
-
-
-@dataclass
-class McpAuthorPlugin:
+class MCPAuthorPlugin:
     endpoint: str
     model_router: ModelRouter
     system_prompt: str
 
     def run(self, payload: AuthorAgentInput) -> AuthorAgentOutput:
-        client = McpAgentClient(self.endpoint)
-        response = client.invoke(
-            role="author",
-            payload={
-                "prev_tag": payload.prev_tag,
-                "new_tag": payload.new_tag,
-                "evidence_bundle": payload.evidence_bundle,
-                "release_notes": payload.release_notes,
-                "diff_content": payload.diff_content,
-                "review_feedback": payload.review_feedback,
-            },
-            model_spec=self.model_router.resolve("author"),
-            system_prompt=self.system_prompt,
+        attempts = _env_int("MCP_AUTHOR_RETRIES", 3, minimum=1)
+        backoff_seconds = _env_float("MCP_AUTHOR_RETRY_BACKOFF_SECONDS", 1.0, minimum=0.0)
+        client = MCPAgentClient(
+            self.endpoint,
+            timeout_seconds=_env_int("MCP_AGENT_TIMEOUT_SECONDS", 45, minimum=1),
         )
-        return AuthorAgentOutput(
-            doc_patch_diff=str(response.get("doc_patch_diff", "")),
-            change_summary_md=str(response.get("change_summary_md", "")),
-            claims=response.get("claims", {}),
-            evidence_map=response.get("evidence_map", {}),
-        )
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                logger.info("author.mcp.attempt started attempt=%s/%s endpoint=%s", attempt, attempts, self.endpoint)
+                response = client.invoke(
+                    role="author",
+                    payload={
+                        "prev_tag": payload.prev_tag,
+                        "new_tag": payload.new_tag,
+                        "evidence_bundle": payload.evidence_bundle,
+                        "release_notes": payload.release_notes,
+                        "diff_content": payload.diff_content,
+                        "review_feedback": payload.review_feedback,
+                    },
+                    model_spec=self.model_router.resolve("author"),
+                    system_prompt=self.system_prompt,
+                )
+                claims = _validate_author_claims(response.get("claims"))
+                return AuthorAgentOutput(
+                    doc_patch_diff=str(response.get("doc_patch_diff", "")),
+                    change_summary_md=str(response.get("change_summary_md", "")),
+                    claims=claims,
+                    evidence_map=response.get("evidence_map", {}),
+                )
+            except (ValueError, RuntimeError, TimeoutError) as exc:
+                last_error = exc
+                if attempt == attempts or not _is_retryable_mcp_author_error(str(exc)):
+                    logger.error(
+                        "author.mcp.attempt failed attempt=%s/%s retryable=%s error=%s",
+                        attempt,
+                        attempts,
+                        _is_retryable_mcp_author_error(str(exc)),
+                        str(exc),
+                    )
+                    raise
+                logger.warning(
+                    "author.mcp.attempt retrying attempt=%s/%s sleep_seconds=%.1f error=%s",
+                    attempt,
+                    attempts,
+                    backoff_seconds * attempt,
+                    str(exc),
+                )
+                time.sleep(backoff_seconds * attempt)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("MCP author invocation failed without a specific error")
 
 
 @dataclass
-class McpReviewerPlugin:
+class MCPReviewerPlugin:
     endpoint: str
     model_router: ModelRouter
     system_prompt: str
 
     def run(self, payload: ReviewerAgentInput) -> ReviewerAgentOutput:
-        client = McpAgentClient(self.endpoint)
+        client = MCPAgentClient(
+            self.endpoint,
+            timeout_seconds=_env_int("MCP_AGENT_TIMEOUT_SECONDS", 45, minimum=1),
+        )
         response = client.invoke(
             role="reviewer",
             payload={
@@ -138,52 +135,57 @@ class AgentRegistry:
         self.prompts_config = self._load_yaml(prompts_config_path)
         self.model_router = model_router
         self.path_mapping_file = path_mapping_file
+        self.agent_only = os.getenv("AGENT_ONLY", "true").strip().lower() in {"1", "true", "yes", "on"}
+        if self.agent_only:
+            self._validate_agent_only_defaults()
 
     def build_author_plugin(self) -> Any:
         plugin_id = str(
-            self.agents_config.get("defaults", {}).get("author_plugin", "deterministic_author")
+            self.agents_config.get("defaults", {}).get("author_plugin", "mcp_author")
         )
         plugin_cfg = self._plugin_config(plugin_id)
-        plugin_type = str(plugin_cfg.get("type", "deterministic_author"))
-        if plugin_type == "deterministic_author":
-            return DeterministicAuthorPlugin(path_mapping_file=self.path_mapping_file)
+        plugin_type = str(plugin_cfg.get("type", "mcp_author"))
         if plugin_type == "mcp_author":
-            endpoint = str(plugin_cfg.get("endpoint", "")).strip()
+            endpoint = str(plugin_cfg.get("endpoint", "")).strip() or os.getenv(
+                "MCP_AUTHOR_ENDPOINT", ""
+            ).strip()
             if not endpoint:
-                raise ValueError("mcp_author plugin requires endpoint")
+                raise ValueError("MCP_AUTHOR_ENDPOINT is required when author plugin is mcp_author")
             prompt = str(
                 self.prompts_config.get("author", {}).get(
                     "system",
                     "You are an evidence-based documentation author.",
                 )
             )
-            return McpAuthorPlugin(endpoint=endpoint, model_router=self.model_router, system_prompt=prompt)
-        raise ValueError(f"unsupported author plugin type: {plugin_type}")
+            return MCPAuthorPlugin(endpoint=endpoint, model_router=self.model_router, system_prompt=prompt)
+        raise ValueError(f"unsupported author plugin type: {plugin_type}; only mcp_author is allowed")
 
     def build_reviewer_plugin(self) -> Any:
         plugin_id = str(
-            self.agents_config.get("defaults", {}).get("reviewer_plugin", "deterministic_reviewer")
+            self.agents_config.get("defaults", {}).get("reviewer_plugin", "mcp_reviewer")
         )
         plugin_cfg = self._plugin_config(plugin_id)
-        plugin_type = str(plugin_cfg.get("type", "deterministic_reviewer"))
-        if plugin_type == "deterministic_reviewer":
-            return DeterministicReviewerPlugin()
+        plugin_type = str(plugin_cfg.get("type", "mcp_reviewer"))
         if plugin_type == "mcp_reviewer":
-            endpoint = str(plugin_cfg.get("endpoint", "")).strip()
+            endpoint = str(plugin_cfg.get("endpoint", "")).strip() or os.getenv(
+                "MCP_REVIEWER_ENDPOINT", ""
+            ).strip()
             if not endpoint:
-                raise ValueError("mcp_reviewer plugin requires endpoint")
+                raise ValueError(
+                    "MCP_REVIEWER_ENDPOINT is required when reviewer plugin is mcp_reviewer"
+                )
             prompt = str(
                 self.prompts_config.get("reviewer", {}).get(
                     "system",
                     "You are a strict evidence-based documentation reviewer.",
                 )
             )
-            return McpReviewerPlugin(
+            return MCPReviewerPlugin(
                 endpoint=endpoint,
                 model_router=self.model_router,
                 system_prompt=prompt,
             )
-        raise ValueError(f"unsupported reviewer plugin type: {plugin_type}")
+        raise ValueError(f"unsupported reviewer plugin type: {plugin_type}; only mcp_reviewer is allowed")
 
     def max_revision_loops(self) -> int:
         return int(self.agents_config.get("defaults", {}).get("max_revision_loops", 2))
@@ -197,6 +199,17 @@ class AgentRegistry:
             raise ValueError(f"invalid plugin config for {plugin_id}")
         return cfg
 
+    def _validate_agent_only_defaults(self) -> None:
+        defaults = self.agents_config.get("defaults", {})
+        if not isinstance(defaults, dict):
+            raise ValueError("agents.defaults must be a mapping")
+        author_plugin = str(defaults.get("author_plugin", "")).strip()
+        reviewer_plugin = str(defaults.get("reviewer_plugin", "")).strip()
+        if author_plugin and not author_plugin.startswith("mcp_"):
+            raise ValueError("AGENT_ONLY mode requires defaults.author_plugin to be an mcp plugin")
+        if reviewer_plugin and not reviewer_plugin.startswith("mcp_"):
+            raise ValueError("AGENT_ONLY mode requires defaults.reviewer_plugin to be an mcp plugin")
+
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:
         if not path.exists():
@@ -206,3 +219,57 @@ class AgentRegistry:
         if not isinstance(data, dict):
             raise ValueError(f"invalid yaml config: {path}")
         return data
+
+
+def _validate_author_claims(raw_claims: Any) -> dict[str, Any]:
+    if not isinstance(raw_claims, dict):
+        raise ValueError("invalid MCP author response: claims must be an object")
+    claims_list = raw_claims.get("claims")
+    if not isinstance(claims_list, list):
+        raise ValueError("invalid MCP author response: claims.claims must be a list")
+    claim_count = raw_claims.get("claim_count")
+    if not isinstance(claim_count, int):
+        raise ValueError("invalid MCP author response: claims.claim_count must be an integer")
+    if claim_count != len(claims_list):
+        raise ValueError("invalid MCP author response: claims.claim_count does not match claims length")
+    return raw_claims
+
+
+def _is_retryable_mcp_author_error(message: str) -> bool:
+    lowered = message.lower()
+    markers = [
+        "claims must be an object",
+        "claims.claims must be a list",
+        "claims.claim_count must be an integer",
+        "claims.claim_count does not match claims length",
+        "timed out",
+        "couldn't connect",
+        "failed to connect",
+        "connection reset",
+        "bad gateway",
+        "502",
+    ]
+    return any(marker in lowered for marker in markers)
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
+# Backward-compatible aliases to avoid breaking existing references.
+McpAuthorPlugin = MCPAuthorPlugin
+McpReviewerPlugin = MCPReviewerPlugin

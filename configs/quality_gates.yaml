@@ -1,6 +1,6 @@
 gates:
   - id: G1
-    description: "文档正文禁止出现 AI 元信息"
+    description: "每条 claim 必须包含可追溯证据（code_path + reason）"
     level: blocker
   - id: G2
     description: "每条改动必须可映射到 evidence 与 claims"
@@ -23,3 +23,6 @@ gates:
   - id: G8
     description: "同一 idempotency_key 重复触发应跳过"
     level: warning
+  - id: G9
+    description: "文档正文禁止出现 AI 元信息"
+    level: blocker

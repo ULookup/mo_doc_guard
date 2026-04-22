@@ -13,6 +13,8 @@ def test_writer_generates_claims_and_summary() -> None:
             prev_tag="v1.0.0",
             new_tag="v1.1.0",
             evidence_bundle={
+                "commits": [{"sha": "abc", "subject": "parser: fix tokenize behavior"}],
+                "changed_files": ["pkg/sql/parsers/parser.go"],
                 "retrieval_scope": [
                     {
                         "code_path": "pkg/sql/parsers/parser.go",
@@ -31,6 +33,8 @@ def test_writer_generates_claims_and_summary() -> None:
     )
     assert output.claims["claim_count"] == 1
     assert "docs/sql-reference/sql-syntax.md" in output.doc_patch_diff
+    assert "Representative commit: parser: fix tokenize behavior." in output.doc_patch_diff
+    assert "Representative changed file: pkg/sql/parsers/parser.go." in output.doc_patch_diff
     assert "Proposed Documentation Updates" in output.change_summary_md
 
 

@@ -179,3 +179,34 @@ def test_quality_gate_fails_for_garbage_line_outside_diff_blocks() -> None:
         path_mapping_file=Path("configs/path_mapping.yaml").resolve(),
     )
     assert gate["decision"] == "fail"
+
+
+def test_quality_gate_fails_for_ai_marker_when_g9_enabled() -> None:
+    gate = evaluate_quality_gate(
+        reviewer_decision="pass",
+        blocking_issues=[],
+        review_report={"claim_results": []},
+        claims={"claim_count": 0},
+        doc_patch_diff=(
+            "diff --git a/docs/sql-reference/sql-syntax.md b/docs/sql-reference/sql-syntax.md\n"
+            "+This section is AI-generated.\n"
+        ),
+        path_mapping_file=Path("configs/path_mapping.yaml").resolve(),
+    )
+    assert gate["decision"] == "fail"
+    assert any("G9" in issue for issue in gate["gate_issues"])
+
+
+def test_quality_gate_allows_neutral_llm_term() -> None:
+    gate = evaluate_quality_gate(
+        reviewer_decision="pass",
+        blocking_issues=[],
+        review_report={"claim_results": []},
+        claims={"claim_count": 0},
+        doc_patch_diff=(
+            "diff --git a/docs/sql-reference/sql-syntax.md b/docs/sql-reference/sql-syntax.md\n"
+            "+This section explains LLM integration behavior.\n"
+        ),
+        path_mapping_file=Path("configs/path_mapping.yaml").resolve(),
+    )
+    assert gate["decision"] == "pass"

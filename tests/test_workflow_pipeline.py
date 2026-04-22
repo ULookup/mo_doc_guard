@@ -22,10 +22,39 @@ def test_run_phase2_idempotency_skip(tmp_path: Path, monkeypatch) -> None:
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
     monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", lambda settings, dry_run: "sync-ok")
+    monkeypatch.setattr(
+        "app.agents.registry.MCPAuthorPlugin.run",
+        lambda _self, _input: type(
+            "AuthorOut",
+            (),
+            {
+                "doc_patch_diff": "",
+                "change_summary_md": "No changes.",
+                "claims": {"claim_count": 0, "claims": []},
+                "evidence_map": {},
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "app.agents.registry.MCPReviewerPlugin.run",
+        lambda _self, _input: type(
+            "ReviewerOut",
+            (),
+            {
+                "decision": "approved",
+                "comments": "approved",
+                "blocking_issues": [],
+                "review_report": {"decision": "pass", "claim_results": []},
+                "verification_map": {},
+            },
+        )(),
+    )
 
     first = run_phase2(
         prev_tag="v1.0.0",
@@ -57,6 +86,8 @@ def test_dry_run_success_does_not_skip_real_run(tmp_path: Path, monkeypatch) -> 
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXONE_REPO", "git@github.com:matrixorigin/matrixone.git")
@@ -69,6 +100,33 @@ def test_dry_run_success_does_not_skip_real_run(tmp_path: Path, monkeypatch) -> 
         return "sync-ok"
 
     monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", fake_sync)
+    monkeypatch.setattr(
+        "app.agents.registry.MCPAuthorPlugin.run",
+        lambda _self, _input: type(
+            "AuthorOut",
+            (),
+            {
+                "doc_patch_diff": "",
+                "change_summary_md": "No changes.",
+                "claims": {"claim_count": 0, "claims": []},
+                "evidence_map": {},
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "app.agents.registry.MCPReviewerPlugin.run",
+        lambda _self, _input: type(
+            "ReviewerOut",
+            (),
+            {
+                "decision": "approved",
+                "comments": "approved",
+                "blocking_issues": [],
+                "review_report": {"decision": "pass", "claim_results": []},
+                "verification_map": {},
+            },
+        )(),
+    )
     monkeypatch.setattr(
         "app.graph.langgraph_workflow.collect_evidence_bundle",
         lambda **kwargs: {
@@ -105,10 +163,39 @@ def test_phase3_writes_evidence_bundle(tmp_path: Path, monkeypatch) -> None:
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
     monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", lambda settings, dry_run: "sync-ok")
+    monkeypatch.setattr(
+        "app.agents.registry.MCPAuthorPlugin.run",
+        lambda _self, _input: type(
+            "AuthorOut",
+            (),
+            {
+                "doc_patch_diff": "",
+                "change_summary_md": "No changes.",
+                "claims": {"claim_count": 0, "claims": []},
+                "evidence_map": {},
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "app.agents.registry.MCPReviewerPlugin.run",
+        lambda _self, _input: type(
+            "ReviewerOut",
+            (),
+            {
+                "decision": "approved",
+                "comments": "approved",
+                "blocking_issues": [],
+                "review_report": {"decision": "pass", "claim_results": []},
+                "verification_map": {},
+            },
+        )(),
+    )
 
     result = run_phase3(
         prev_tag="v3.0.0",
@@ -127,6 +214,8 @@ def test_phase3_writes_evidence_bundle(tmp_path: Path, monkeypatch) -> None:
     assert evidence["mode"] == "dry_run"
     assert evidence["prev_tag"] == "v3.0.0"
     assert evidence["new_tag"] == "v3.1.0"
+    assert "release_notes" in evidence
+    assert "diff_content" in evidence
     assert (run_dir / "doc_patch.diff").exists()
     assert (run_dir / "change_summary.md").exists()
     assert not (run_dir / "review_report.json").exists()
@@ -143,12 +232,14 @@ def test_workflow_fails_when_reviewer_decision_is_fail(tmp_path: Path, monkeypat
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
     monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", lambda settings, dry_run: "sync-ok")
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicAuthorPlugin.run",
+        "app.agents.registry.MCPAuthorPlugin.run",
         lambda _self, _input: type(
             "AuthorOut",
             (),
@@ -181,7 +272,7 @@ def test_workflow_fails_when_reviewer_decision_is_fail(tmp_path: Path, monkeypat
         lambda **kwargs: {"context": "mock"},
     )
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicReviewerPlugin.run",
+        "app.agents.registry.MCPReviewerPlugin.run",
         lambda _self, _input: type(
             "ReviewerOut",
             (),
@@ -210,12 +301,14 @@ def test_workflow_skips_pr_when_patch_empty(tmp_path: Path, monkeypatch) -> None
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
     monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", lambda settings, dry_run: "sync-ok")
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicAuthorPlugin.run",
+        "app.agents.registry.MCPAuthorPlugin.run",
         lambda _self, _input: type(
             "AuthorOut",
             (),
@@ -228,7 +321,7 @@ def test_workflow_skips_pr_when_patch_empty(tmp_path: Path, monkeypatch) -> None
         )(),
     )
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicReviewerPlugin.run",
+        "app.agents.registry.MCPReviewerPlugin.run",
         lambda _self, _input: type(
             "ReviewerOut",
             (),
@@ -250,3 +343,56 @@ def test_workflow_skips_pr_when_patch_empty(tmp_path: Path, monkeypatch) -> None
     )
     assert result["status"] == "success"
     assert result["pr_result"] == "skipped_no_substantive_change"
+
+
+def test_workflow_passes_enriched_evidence_to_author_input(tmp_path: Path, monkeypatch) -> None:
+    runs_dir = tmp_path / "runs"
+    docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("RUNS_DIR", str(runs_dir))
+    monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
+    monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
+    monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", lambda settings, dry_run: "sync-ok")
+    monkeypatch.setattr(
+        "app.graph.langgraph_workflow.collect_evidence_bundle",
+        lambda **kwargs: {
+            "mode": "normal",
+            "commit_count": 1,
+            "file_count": 1,
+            "commits": [{"sha": "abc", "subject": "parser fix"}],
+            "changed_files": ["pkg/sql/parsers/parser.go"],
+            "retrieval_scope": [],
+            "release_notes": "Release range: v1.0.0..v1.1.0",
+            "diff_content": "diff --git a/pkg/sql/parsers/parser.go b/pkg/sql/parsers/parser.go",
+        },
+    )
+    captured: dict[str, str] = {}
+
+    def fake_author(_self, payload):
+        captured["release_notes"] = payload.release_notes
+        captured["diff_content"] = payload.diff_content
+        return type(
+            "AuthorOut",
+            (),
+            {
+                "doc_patch_diff": "",
+                "change_summary_md": "No changes.",
+                "claims": {"claim_count": 0, "claims": []},
+                "evidence_map": {},
+            },
+        )()
+
+    monkeypatch.setattr("app.agents.registry.MCPAuthorPlugin.run", fake_author)
+
+    result = run_phase3(
+        prev_tag="v1.0.0",
+        new_tag="v1.1.0",
+        trigger_source="manual",
+        dry_run=True,
+    )
+    assert result["status"] == "success"
+    assert captured["release_notes"] != ""
+    assert captured["diff_content"] != ""

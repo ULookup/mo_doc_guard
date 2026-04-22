@@ -78,14 +78,10 @@ def create_docs_pr(
         "--body",
         body,
     ]
-    result = subprocess.run(
-        command,
-        check=True,
-        capture_output=True,
-        text=True,
-        env=_gh_env(),
-    )
+    result = _run_gh(command)
     pr_url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    if not pr_url:
+        raise RuntimeError("gh pr create did not return a pull request URL")
     return {
         "pr_created": True,
         "simulated": False,
@@ -131,13 +127,9 @@ def get_pr_context(*, pr_url: str, dry_run: bool, docs_repo_dir: Path) -> dict[s
         return {"mode": "dry_run", "pr_url": pr_url, "changes": ""}
     if not pr_url:
         return {"mode": "real", "pr_url": "", "changes": ""}
-    result = subprocess.run(
+    result = _run_gh(
         ["gh", "pr", "view", pr_url, "--json", "files,commits,body,title,headRefName,baseRefName"],
         cwd=docs_repo_dir,
-        check=True,
-        capture_output=True,
-        text=True,
-        env=_gh_env(),
     )
     return {"mode": "real", "pr_url": pr_url, "context": result.stdout}
 
@@ -147,20 +139,20 @@ def approve_pr(*, pr_url: str, dry_run: bool) -> dict[str, Any]:
         return {"approved": True, "simulated": True}
     if not pr_url:
         return {"approved": False, "simulated": False}
-    result = subprocess.run(
-        ["gh", "pr", "review", pr_url, "--approve"],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=_gh_env(),
-    )
+    result = _run_gh(["gh", "pr", "review", pr_url, "--approve"])
     return {"approved": True, "simulated": False, "output": result.stdout}
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True, env=env)
+    try:
+        return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        raise RuntimeError(
+            f"git command failed in github_pr: {' '.join(args)} (exit={exc.returncode}) stderr={stderr[:400]}"
+        ) from exc
 
 
 def _require_docs_repo_token() -> str:
@@ -254,3 +246,20 @@ def _authenticated_repo_url(repo_url: str, token: str) -> str:
     https_url = _normalize_repo_url_to_https(repo_url)
     encoded = quote(token, safe="")
     return https_url.replace("https://", f"https://x-access-token:{encoded}@")
+
+
+def _run_gh(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_gh_env(),
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        raise RuntimeError(
+            f"gh command failed in github_pr: {' '.join(args)} (exit={exc.returncode}) stderr={stderr[:400]}"
+        ) from exc

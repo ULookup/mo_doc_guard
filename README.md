@@ -91,6 +91,12 @@ flowchart TD
   approvePrNode --> endNode[endNode]
 ```
 
+当前实现边界（重要）：
+
+- 当前 evidence bundle 在默认实现中主要包含 `commits`、`changed_files`、`retrieval_scope`
+- `release_notes` / `diff_content` 字段在未启用增强采集前可能为空或摘要化内容
+- 因此建议先在 dry-run 校验证据质量，再启用真实 PR 模式
+
 ## 环境要求
 
 - Python `3.11.x`
@@ -109,14 +115,14 @@ source .venv/bin/activate
 2) 服务健康检查
 
 ```bash
-python -m app.main
+python3 -m app.main
 curl http://127.0.0.1:8080/healthz
 ```
 
 3) 执行一次 dry-run 流水线
 
 ```bash
-python -m app.graph.workflow \
+python3 -m app.graph.workflow \
   --prev-tag v0.9.0 \
   --new-tag v0.9.1 \
   --trigger-source manual \
@@ -135,7 +141,7 @@ pytest -q
 仅在你已完成 token、仓库权限、分支策略校验后启用：
 
 ```bash
-python -m app.graph.workflow \
+python3 -m app.graph.workflow \
   --prev-tag v0.9.0 \
   --new-tag v0.9.1 \
   --trigger-source workflow_dispatch \
@@ -168,6 +174,9 @@ cp .env.example .env
 - `MODELS_CONFIG_PATH`：模型路由配置路径
 - `PROMPTS_CONFIG_PATH`：提示词配置路径
 - `QUALITY_GATES_CONFIG_PATH`：门禁配置路径
+- `MCP_AUTHOR_ENDPOINT`：Author MCP 服务地址（可覆盖 `configs/agents.yaml`）
+- `MCP_REVIEWER_ENDPOINT`：Reviewer MCP 服务地址（可覆盖 `configs/agents.yaml`）
+- `ANTHROPIC_BASE_URL`：Anthropic 兼容 API 基础地址（例如 MiniMax）
 - `DOCS_REPO_TOKEN`：建议优先配置，目标 docs 仓写权限
 - `OPENAI_API_KEY`：OpenAI provider 密钥（可选）
 - `ANTHROPIC_API_KEY`：Anthropic provider 密钥（可选）
@@ -208,6 +217,26 @@ cp .env.example .env
 
 - 先用 deterministic 路径打通，再切换到 MCP
 - 在 staging 环境验证 schema 稳定性后再上线
+
+## 本地 MCP 服务（已内置）
+
+项目已内置本地网关：`app/mcp_gateway/server.py`，提供：
+
+- `GET /healthz`：服务健康状态
+- `POST /invoke`：统一 Author/Reviewer 调用入口
+
+启动命令：
+
+```bash
+python3 -m uvicorn app.mcp_gateway.server:app --host 127.0.0.1 --port 8787
+```
+
+建议配置：
+
+- `.env` 中将 `MCP_AUTHOR_ENDPOINT`、`MCP_REVIEWER_ENDPOINT` 设为 `http://127.0.0.1:8787/invoke`
+- `ANTHROPIC_BASE_URL` 使用 MiniMax Anthropic 兼容地址
+- `ANTHROPIC_API_KEY` 使用你的 MiniMax key
+- 本地联调可设 `MCP_GATEWAY_MOCK=true`（不调用外部模型）
 
 ## 运行产物与审计
 

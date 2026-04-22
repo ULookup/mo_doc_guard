@@ -12,12 +12,14 @@ def test_langgraph_happy_path_generates_review_and_pr_payload(tmp_path: Path, mo
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
     monkeypatch.setattr("app.graph.langgraph_workflow.sync_docs_repo_main", lambda settings, dry_run: "sync-ok")
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicAuthorPlugin.run",
+        "app.agents.registry.MCPAuthorPlugin.run",
         lambda _self, _input: type(
             "AuthorOut",
             (),
@@ -46,7 +48,7 @@ def test_langgraph_happy_path_generates_review_and_pr_payload(tmp_path: Path, mo
         )(),
     )
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicReviewerPlugin.run",
+        "app.agents.registry.MCPReviewerPlugin.run",
         lambda _self, _input: type(
             "ReviewerOut",
             (),
@@ -74,6 +76,8 @@ def test_langgraph_reviewer_loop_reaches_reject(tmp_path: Path, monkeypatch) -> 
     docs_repo_dir = tmp_path / "repos" / "matrixorigin.io"
 
     monkeypatch.setenv("APP_ENV", "dev")
+    monkeypatch.setenv("MCP_AUTHOR_ENDPOINT", "http://127.0.0.1:8787/invoke")
+    monkeypatch.setenv("MCP_REVIEWER_ENDPOINT", "http://127.0.0.1:8787/invoke")
     monkeypatch.setenv("RUNS_DIR", str(runs_dir))
     monkeypatch.setenv("DOCS_REPO_DIR", str(docs_repo_dir))
     monkeypatch.setenv("MATRIXORIGIN_DOCS_REPO", "git@github.com:matrixorigin/matrixorigin.io.git")
@@ -84,7 +88,7 @@ def test_langgraph_reviewer_loop_reaches_reject(tmp_path: Path, monkeypatch) -> 
         lambda _self: 1,
     )
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicAuthorPlugin.run",
+        "app.agents.registry.MCPAuthorPlugin.run",
         lambda _self, _input: type(
             "AuthorOut",
             (),
@@ -113,7 +117,7 @@ def test_langgraph_reviewer_loop_reaches_reject(tmp_path: Path, monkeypatch) -> 
         )(),
     )
     monkeypatch.setattr(
-        "app.agents.registry.DeterministicReviewerPlugin.run",
+        "app.agents.registry.MCPReviewerPlugin.run",
         lambda _self, _input: type(
             "ReviewerOut",
             (),
